@@ -1,0 +1,21 @@
+# python
+__pycache__/
+*.pyc
+.venv/
+.ipynb_checkpoints/
+
+# data: too big for git (Connectivity_783.parquet alone is 100.8 MB, which is
+# over GitHub's 100 MB per-file hard limit). See data/README.md to re-fetch.
+data/*.parquet
+data/*.csv
+data/*.csv.gz
+data/parts/
+
+# generated outputs
+results/*.png
+results/*.csv
+results/*.log
+results/*.mp4
+results/*.gif
+results/*.json
+results/*.html
