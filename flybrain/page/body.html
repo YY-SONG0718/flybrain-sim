@@ -1,0 +1,91 @@
+<div class="wrap">
+<header>
+  <div class="eyebrow">FlyWire v783 · 138,639 neurons · leaky integrate-and-fire</div>
+  <h1>{{TITLE}}</h1>
+  <p class="standfirst">{{STANDFIRST}}</p>
+</header>
+
+<div class="transport">
+  <button class="play" id="play" type="button">Play</button>
+  <input type="range" id="scrub" min="0" max="119" value="0" step="1" aria-label="Time in the episode">
+  <span class="clock" id="clock">t = 0.00 s</span>
+  <span class="state" id="state" data-s="none">no stimulus</span>
+</div>
+
+<div class="rig">
+  <div class="views">
+    <div class="panel">
+      <h2>Frontal view <em>the fly's face · 903 µm across</em></h2>
+      <canvas id="frontal" ></canvas>
+    </div>
+    <div class="panel">
+      <h2>Dorsal view <em>looking down on the head</em></h2>
+      <canvas id="dorsal" ></canvas>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>{{BODY_TITLE}}</h2>
+    <canvas id="body" ></canvas>
+    <div class="readouts">
+      <div class="readout motor">
+        <div class="k">{{READOUT}} output</div>
+        <div class="v" id="r-mn9">0 Hz</div>
+      </div>
+      <div class="readout">
+        <div class="k">Neurons firing</div>
+        <div class="v" id="r-active">0</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="trace-wrap">
+  <h2>Motor output over the episode — drag to scrub</h2>
+  <canvas id="trace" ></canvas>
+  <div class="legend">
+    <span><i class="swatch" style="background:var(--motor)"></i>{{READOUT}} firing rate</span>
+    {{LEGEND}}
+  </div>
+</div>
+
+<div class="inspect">
+  <h2>Loudest neurons at this instant</h2>
+  <div class="tablescroll">
+    <table>
+      <thead><tr><th>Cell type</th><th>Class</th><th>FlyWire root ID</th><th class="num">Rate</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<div class="notes">
+  <div>
+    <h3>What you're looking at</h3>
+    <p>Each dot is one neuron at its real position in the FAFB brain volume, from the FlyWire
+    annotation release. The bright cluster sits on the ventral midline — the sub-esophageal zone,
+    which is where fly taste processing actually lives. Nothing places it there but the data.
+    {{READOUT}} is the one <span style="color:var(--motor)">orange</span> dot: it lights only when {{READOUT}}
+    itself fires. Blue glow near the tick is its neighbours — about a hundred neurons sit within
+    13&nbsp;µm of it at this scale.</p>
+  </div>
+  <div>
+    <h3>Why the body is stylised</h3>
+    <p>The proboscis is a kinematic rig, not physics: MN9's firing rate, low-pass filtered, sets the
+    joint angles. A real embodied version needs MuJoCo — NeuroMechFly or flybody — which is the
+    obvious next step and the thing nobody has yet closed the loop on.</p>
+  </div>
+  <div>
+    <h3>What the model doesn't know</h3>
+    <p>Synapse count stands in for synaptic weight. There is no neuromodulation, no plasticity, no
+    intrinsic cell diversity, and neurotransmitter signs are predictions that are right about 87% of
+    the time. Trust which neurons respond and the sign of an effect; not the absolute rates.</p>
+  </div>
+</div>
+
+<footer>
+  Connectome and model parameterisation from Shiu, Sterne, Spiller et al., <em>Nature</em> (2024).
+  Positions and cell typing from the FlyWire whole-brain annotation release, Schlegel et al.,
+  <em>Nature</em> (2024). FlyWire data is CC-BY-NC.
+</footer>
+</div>

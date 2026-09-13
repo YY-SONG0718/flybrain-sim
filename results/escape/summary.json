@@ -1,0 +1,25 @@
+{
+ "name": "escape",
+ "drives": [
+  {
+   "name": "LC4",
+   "n": 104,
+   "windows": [
+    [
+     0.4,
+     1.1,
+     200.0
+    ]
+   ]
+  }
+ ],
+ "silence": [],
+ "readout": {
+  "name": "DNp01",
+  "model_index": 108748,
+  "rate_in_window": 144.2857208251953
+ },
+ "n_active": 732,
+ "t_run": 1.4000000000000001,
+ "seed": 3
+}

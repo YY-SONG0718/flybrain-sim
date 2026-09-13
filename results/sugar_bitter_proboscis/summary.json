@@ -1,0 +1,41 @@
+{
+ "name": "sugar_bitter_proboscis",
+ "drives": [
+  {
+   "name": "sugar",
+   "n": 20,
+   "windows": [
+    [
+     0.4,
+     1.1,
+     100.0
+    ],
+    [
+     1.5,
+     2.2,
+     100.0
+    ]
+   ]
+  },
+  {
+   "name": "bitter",
+   "n": 20,
+   "windows": [
+    [
+     1.5,
+     2.2,
+     150.0
+    ]
+   ]
+  }
+ ],
+ "silence": [],
+ "readout": {
+  "name": "MN9",
+  "model_index": 138332,
+  "rate_in_window": 37.14285659790039
+ },
+ "n_active": 432,
+ "t_run": 2.4,
+ "seed": 3
+}

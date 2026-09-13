@@ -9,5 +9,8 @@ dependencies = [
     "scipy>=1.10",
     "pandas>=2.0",
     "matplotlib>=3.7",
-    "brotli>=1.0",
+    "loguru>=0.7.3",
+    "pyarrow>=25.0.1",
+    "imageio>=2.37.4",
+    "flygym>=2.1.0",
 ]

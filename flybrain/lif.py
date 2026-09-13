@@ -1,32 +1,111 @@
 """Leaky integrate-and-fire dynamics on the FlyWire connectome.
 
-A NumPy/SciPy re-implementation of the whole-brain model of
-Shiu, Sterne, Spiller et al. (Nature 2024), "A leaky integrate-and-fire
-computational model based on the connectome of the entire adult Drosophila
-brain reveals insights into sensorimotor processing".
-
-Every neuron is a single LIF unit; every connection's weight is its synapse
-count times a single global free parameter, signed by the FlyWire
-neurotransmitter prediction. There are no tuned per-synapse weights,
-no neuromodulation and no plasticity -- see README for what that costs you.
+A NumPy/SciPy re-implementation of the whole-brain model of Shiu, Sterne,
+Spiller et al. (Nature 2024). Every neuron is a single LIF unit; every
+connection's weight is its synapse count times one global free parameter,
+signed by the FlyWire neurotransmitter prediction. There are no tuned
+per-synapse weights, no neuromodulation and no plasticity -- see the README
+for what that costs you.
 """
-import numpy as np
+from __future__ import annotations
 
-# All times in seconds, voltages in volts, to keep units boring and consistent.
-DEFAULT_PARAMS = {
-    "v_0":   -52e-3,   # resting potential          (Kakaria & de Bivort 2017)
-    "v_rst": -52e-3,   # reset potential after spike
-    "v_th":  -45e-3,   # spike threshold
-    "t_mbr":  20e-3,   # membrane time constant
-    "tau":     5e-3,   # synaptic (alpha) time constant  (Juergensen et al. 2021)
-    "t_rfc":   2.2e-3, # refractory period               (Lazar et al. 2021)
-    "t_dly":   1.8e-3, # synaptic delay                  (Paul et al. 2015)
-    "w_syn":   0.275e-3,  # volts of drive per synapse -- the one free parameter
-    "f_poi":   250,    # scaling of the external Poisson drive (250 => every
-                       # external event is suprathreshold, so a stimulated
-                       # neuron fires at the rate you ask for)
-    "dt":      0.1e-3, # integration step
+from dataclasses import dataclass, field
+from typing import Iterable, Mapping, Sequence, Union
+
+import numpy as np
+import pandas as pd
+from loguru import logger
+
+from .connectome import Connectome
+
+RateSchedule = Union[float, Sequence[tuple[float, float, float]]]
+NeuronGroup = Union[int, Iterable[int]]
+
+# All times in seconds, voltages in volts.
+DEFAULT_PARAMS: dict[str, float] = {
+    "v_rest": -52e-3,       # resting potential                 (Kakaria & de Bivort 2017)
+    "v_reset": -52e-3,      # reset potential after a spike
+    "v_threshold": -45e-3,  # spike threshold
+    "tau_membrane": 20e-3,  # membrane time constant
+    "tau_synapse": 5e-3,    # synaptic (alpha) time constant   (Juergensen et al. 2021)
+    "t_refractory": 2.2e-3, # refractory period                (Lazar et al. 2021)
+    "t_delay": 1.8e-3,      # synaptic delay                   (Paul et al. 2015)
+    "w_synapse": 0.275e-3,  # volts of drive per synapse -- the one free parameter
+    "poisson_gain": 250,    # external drive per Poisson event, in units of w_synapse
+                            # (250 => every event is suprathreshold, so a stimulated
+                            #  neuron fires at exactly the rate you ask for)
+    "dt": 0.1e-3,           # integration step
 }
+
+
+def rate_schedule_to_steps(schedule: RateSchedule, n_steps: int, dt: float) -> np.ndarray:
+    """
+    Expand a constant rate or a list of windows into a per-step rate array.
+
+    :param schedule: Rate in Hz, or [(t_start, t_stop, hz), ...].
+    :param n_steps: Number of integration steps.
+    :param dt: Step length in seconds.
+    :return: Array of length ``n_steps`` with the rate at each step.
+    """
+    if np.isscalar(schedule):
+        return np.full(n_steps, float(schedule))
+    per_step = np.zeros(n_steps)
+    for t_start, t_stop, hz in schedule:
+        per_step[int(round(t_start / dt)):int(round(t_stop / dt))] = float(hz)
+    return per_step
+
+
+def concatenate_ranges(starts: np.ndarray, ends: np.ndarray) -> np.ndarray:
+    """
+    Concatenate arange(start, end) for many pairs, without a Python loop.
+
+    :param starts: Range starts.
+    :param ends: Range ends (exclusive).
+    :return: All the ranges' values, in order.
+    """
+    lengths = ends - starts
+    keep = lengths > 0
+    starts, ends, lengths = starts[keep], ends[keep], lengths[keep]
+    total = int(lengths.sum())
+    if total == 0:
+        return np.zeros(0, dtype=np.int64)
+    steps = np.ones(total, dtype=np.int64)
+    steps[0] = starts[0]
+    if len(starts) > 1:
+        steps[np.cumsum(lengths)[:-1]] = starts[1:] - ends[:-1] + 1
+    return np.cumsum(steps)
+
+
+@dataclass
+class ExternalDrive:
+    """Poisson drive to a set of neurons, as per-step event probabilities."""
+    indices: np.ndarray                   # (n_driven,)
+    event_probability: np.ndarray         # (n_steps, n_driven)
+
+    @classmethod
+    def from_schedule(cls, stimulate: Mapping[NeuronGroup, RateSchedule],
+                      n_steps: int, dt: float) -> "ExternalDrive":
+        """
+        Build the per-step event probabilities for a stimulation dict.
+
+        :param stimulate: {neuron indices: rate schedule}.
+        :param n_steps: Number of integration steps.
+        :param dt: Step length in seconds.
+        :return: ExternalDrive with one probability column per driven neuron.
+        """
+        index_blocks: list[np.ndarray] = []
+        rate_blocks: list[np.ndarray] = []
+        for group, schedule in stimulate.items():
+            indices = np.atleast_1d(np.asarray(group, dtype=np.int64))
+            per_step_rate = rate_schedule_to_steps(schedule, n_steps, dt)
+            index_blocks.append(indices)
+            rate_blocks.append(np.repeat(per_step_rate[:, None], len(indices), axis=1))
+        if not index_blocks:
+            return cls(np.zeros(0, dtype=np.int64), np.zeros((n_steps, 0)))
+        return cls(np.concatenate(index_blocks), np.concatenate(rate_blocks, axis=1) * dt)
+
+    def __len__(self) -> int:
+        return len(self.indices)
 
 
 class LIFNetwork:
@@ -34,216 +113,241 @@ class LIFNetwork:
 
     Example
     -------
-    >>> net = LIFNetwork(connectome)
-    >>> res = net.run(stimulate={sugar_idx: 100.0}, t_run=1.0, n_trials=5)
-    >>> res.rate(mn9_idx)
+    >>> network = LIFNetwork(connectome)
+    >>> result = network.run({sugar_indices: 100.0}, t_run=1.0, n_trials=5)
+    >>> result.rate(mn9_index)
     """
 
-    def __init__(self, connectome, params=None, seed=0):
-        self.c = connectome
-        self.p = dict(DEFAULT_PARAMS, **(params or {}))
-        self.rng = np.random.default_rng(seed)
-        W = connectome.W
-        self.indptr = W.indptr
-        self.indices = W.indices
-        self.weights = (W.data * np.float32(self.p["w_syn"])).astype(np.float32)
-
-    # ------------------------------------------------------------------
-    def run(self, stimulate, t_run=1.0, n_trials=1, silence=(), bin_width=None,
-            progress=False):
-        """Run the network.
-
-        Parameters
-        ----------
-        stimulate : dict {neuron_index or array of indices: rate_in_Hz}
-            External Poisson drive. Keys may be a single model index or an
-            array of them; the value is the firing rate imposed on each.
-        t_run : float          trial duration in seconds
-        n_trials : int         repeats, averaged over (the model is stochastic
-                               only through the external Poisson drive)
-        silence : iterable     model indices whose output synapses are set to 0
-        bin_width : float or None
-            if set, also record spike counts in bins of this width (seconds),
-            available as `Result.binned` -- this is what the movies are made from
-
-        Returns
-        -------
-        Result
+    def __init__(self, connectome: Connectome, params: Mapping[str, float] | None = None,
+                 seed: int = 0) -> None:
         """
-        p = self.p
-        dt, n = p["dt"], self.c.n
+        Prepare the network's synaptic weights in volts.
+
+        :param connectome: Loaded connectome.
+        :param params: Overrides for DEFAULT_PARAMS.
+        :param seed: Seed for the external Poisson drive.
+        """
+        self.connectome = connectome
+        self.params: dict[str, float] = dict(DEFAULT_PARAMS, **(params or {}))
+        self.rng = np.random.default_rng(seed)
+        weights = connectome.weights
+        self._indptr: np.ndarray = weights.indptr
+        self._postsynaptic: np.ndarray = weights.indices
+        self._weights_volts: np.ndarray = (
+            weights.data * np.float32(self.params["w_synapse"])).astype(np.float32)
+
+    def run(self, stimulate: Mapping[NeuronGroup, RateSchedule], t_run: float = 1.0,
+            n_trials: int = 1, silence: Iterable[int] = (), bin_width: float | None = None,
+            progress: bool = False) -> "Result":
+        """
+        Run the network and return firing rates and spike times.
+
+        :param stimulate: {neuron indices: rate}. Keys may be a single index or an iterable; a rate is a constant in Hz or a list of (t_start, t_stop, hz) windows.
+        :param t_run: Trial duration in seconds.
+        :param n_trials: Repeats to average over (stochastic only through the external drive).
+        :param silence: Model indices whose output synapses are set to zero.
+        :param bin_width: If set, also record spike counts in bins of this width (seconds) as ``Result.binned``.
+        :param progress: Log progress every 1000 steps.
+        :return: Result.
+        """
+        p = self.params
+        dt = p["dt"]
+        n_neurons = self.connectome.n_neurons
         n_steps = int(round(t_run / dt))
-        delay_steps = max(1, int(round(p["t_dly"] / dt)))
-        rfc_steps = int(round(p["t_rfc"] / dt))
-        decay_v = np.float32(np.exp(-dt / p["t_mbr"]))
-        decay_g = np.float32(np.exp(-dt / p["tau"]))
-        poi_kick = np.float32(p["w_syn"] * p["f_poi"])
+        delay_steps = max(1, int(round(p["t_delay"] / dt)))
+        refractory_steps = int(round(p["t_refractory"] / dt))
+        membrane_decay = np.float32(np.exp(-dt / p["tau_membrane"]))
+        synapse_decay = np.float32(np.exp(-dt / p["tau_synapse"]))
+        poisson_kick_volts = np.float32(p["w_synapse"] * p["poisson_gain"])
+        v_rest = np.float32(p["v_rest"])
+        v_reset = np.float32(p["v_reset"])
+        v_threshold = np.float32(p["v_threshold"])
 
-        # external drive: index array + per-step event probability.
-        # A rate may be a constant, or a schedule [(t_start, t_stop, hz), ...].
-        stim_idx, stim_sched = [], []
-        for k, hz in stimulate.items():
-            k = np.atleast_1d(np.asarray(k, dtype=np.int64))
-            stim_idx.append(k)
-            stim_sched.append(_schedule(hz, n_steps, dt)[:, None].repeat(len(k), 1))
-        stim_idx = (np.concatenate(stim_idx) if stim_idx
-                    else np.zeros(0, dtype=np.int64))
-        # (n_steps, n_stim) probability of an external event
-        stim_p = (np.concatenate(stim_sched, axis=1) * dt
-                  if len(stim_idx) else np.zeros((n_steps, 0)))
+        drive = ExternalDrive.from_schedule(stimulate, n_steps, dt)
+        weights_volts = self._silenced_weights(silence)
 
-        weights = self.weights
-        if len(silence):
-            weights = weights.copy()
-            for i in np.atleast_1d(np.asarray(silence, dtype=np.int64)):
-                weights[self.indptr[i]:self.indptr[i + 1]] = 0.0
-
-        counts = np.zeros((n_trials, n), dtype=np.int32)
-        spike_times = []
         bin_steps = max(1, int(round(bin_width / dt))) if bin_width else 0
         n_bins = int(np.ceil(n_steps / bin_steps)) if bin_steps else 0
-        binned = (np.zeros((n_trials, n_bins, n), dtype=np.uint8)
-                  if bin_steps else None)
+        spike_counts = np.zeros((n_trials, n_neurons), dtype=np.int32)
+        binned_counts = (np.zeros((n_trials, n_bins, n_neurons), dtype=np.uint8)
+                         if bin_steps else None)
+        spike_times: list[list[tuple[float, np.ndarray]]] = []
+
+        logger.debug("run: {} steps x {} trials, {} driven neurons, {} silenced",
+                     n_steps, n_trials, len(drive), len(list(silence)))
 
         for trial in range(n_trials):
-            v = np.full(n, p["v_0"], dtype=np.float32)
-            g = np.zeros(n, dtype=np.float32)
-            refr = np.zeros(n, dtype=np.int32)
-            ring = np.zeros((delay_steps, n), dtype=np.float32)
-            trial_spikes = []
+            voltage = np.full(n_neurons, v_rest, dtype=np.float32)
+            synaptic_drive = np.zeros(n_neurons, dtype=np.float32)
+            refractory_left = np.zeros(n_neurons, dtype=np.int32)
+            delay_ring = np.zeros((delay_steps, n_neurons), dtype=np.float32)
+            trial_spikes: list[tuple[float, np.ndarray]] = []
 
             for step in range(n_steps):
                 slot = step % delay_steps
-                # 1. deliver synaptic input that was released delay_steps ago
-                g += ring[slot]
-                ring[slot] = 0.0
+                # 1. deliver synaptic input released `delay_steps` ago
+                synaptic_drive += delay_ring[slot]
+                delay_ring[slot] = 0.0
 
-                # 2. external Poisson drive (bypasses the refractory period,
-                #    exactly as in the reference model)
-                if len(stim_idx):
-                    hit = self.rng.random(len(stim_idx)) < stim_p[step]
+                # 2. external Poisson drive (bypasses the refractory period, as in
+                #    the reference model)
+                if len(drive):
+                    hit = self.rng.random(len(drive)) < drive.event_probability[step]
                     if hit.any():
-                        idx = stim_idx[hit]
-                        v[idx] += poi_kick
-                        refr[idx] = 0
+                        driven_now = drive.indices[hit]
+                        voltage[driven_now] += poisson_kick_volts
+                        refractory_left[driven_now] = 0
 
-                # 3. integrate (frozen while refractory)
-                active = refr == 0
-                g[active] *= decay_g
-                v_inf = p["v_0"] + g[active]
-                v[active] = v_inf + (v[active] - v_inf) * decay_v
-                refr[~active] -= 1
+                # 3. integrate (state is frozen while refractory)
+                integrating = refractory_left == 0
+                synaptic_drive[integrating] *= synapse_decay
+                v_target = v_rest + synaptic_drive[integrating]
+                voltage[integrating] = v_target + (voltage[integrating] - v_target) * membrane_decay
+                refractory_left[~integrating] -= 1
 
-                # 4. threshold
-                fired = np.flatnonzero(v > p["v_th"])
+                # 4. threshold, reset, refractory
+                fired = np.flatnonzero(voltage > v_threshold)
                 if fired.size:
-                    v[fired] = p["v_rst"]
-                    g[fired] = 0.0
-                    refr[fired] = rfc_steps
-                    counts[trial, fired] += 1
+                    voltage[fired] = v_reset
+                    synaptic_drive[fired] = 0.0
+                    refractory_left[fired] = refractory_steps
+                    spike_counts[trial, fired] += 1
                     trial_spikes.append((step * dt, fired))
-                    if binned is not None:
-                        b = binned[trial, step // bin_steps]
-                        np.add.at(b, fired, 1)
+                    if binned_counts is not None:
+                        np.add.at(binned_counts[trial, step // bin_steps], fired, 1)
                     # 5. schedule postsynaptic input
-                    starts, ends = self.indptr[fired], self.indptr[fired + 1]
-                    if (ends - starts).sum():
-                        sel = _ranges(starts, ends)
-                        np.add.at(ring[(slot + delay_steps - 1) % delay_steps],
-                                  self.indices[sel], weights[sel])
+                    edge_starts = self._indptr[fired]
+                    edge_ends = self._indptr[fired + 1]
+                    edges = concatenate_ranges(edge_starts, edge_ends)
+                    if edges.size:
+                        target_slot = (slot + delay_steps - 1) % delay_steps
+                        np.add.at(delay_ring[target_slot], self._postsynaptic[edges],
+                                  weights_volts[edges])
 
                 if progress and step % 1000 == 0:
-                    print(f"  trial {trial} step {step}/{n_steps}", flush=True)
+                    logger.info("trial {} step {}/{}", trial, step, n_steps)
 
             spike_times.append(trial_spikes)
 
-        return Result(self.c, counts, spike_times, t_run, n_trials, stimulate,
-                      binned=binned, bin_width=bin_width)
+        return Result(self.connectome, spike_counts, spike_times, t_run, n_trials,
+                      dict(stimulate), binned_counts, bin_width)
+
+    def _silenced_weights(self, silence: Iterable[int]) -> np.ndarray:
+        """
+        Copy of the weights with the silenced neurons' outputs zeroed.
+
+        :param silence: Model indices to silence.
+        :return: Weight array in volts (the original if nothing is silenced).
+        """
+        silence = np.atleast_1d(np.asarray(list(silence), dtype=np.int64))
+        if silence.size == 0:
+            return self._weights_volts
+        weights = self._weights_volts.copy()
+        for index in silence:
+            weights[self._indptr[index]:self._indptr[index + 1]] = 0.0
+        return weights
 
 
-def _schedule(spec, n_steps, dt):
-    """Constant rate or [(t_start, t_stop, hz), ...] -> per-step rate array."""
-    if np.isscalar(spec):
-        return np.full(n_steps, float(spec))
-    out = np.zeros(n_steps)
-    for t0, t1, hz in spec:
-        out[int(round(t0 / dt)):int(round(t1 / dt))] = float(hz)
-    return out
-
-
-def _ranges(starts, ends):
-    """Concatenate arange(s, e) for many (s, e) pairs, vectorised."""
-    lens = ends - starts
-    keep = lens > 0
-    starts, ends, lens = starts[keep], ends[keep], lens[keep]
-    total = int(lens.sum())
-    if total == 0:
-        return np.zeros(0, dtype=np.int64)
-    out = np.ones(total, dtype=np.int64)
-    out[0] = starts[0]
-    if len(starts) > 1:
-        out[np.cumsum(lens)[:-1]] = starts[1:] - ends[:-1] + 1
-    return np.cumsum(out)
-
-
+@dataclass
 class Result:
     """Firing rates and spike times from one experiment."""
+    connectome: Connectome
+    counts: np.ndarray                                  # (trials, neurons) spikes
+    spike_times: list[list[tuple[float, np.ndarray]]]   # per trial: [(t, fired indices)]
+    t_run: float
+    n_trials: int
+    stimulate: dict
+    binned: np.ndarray | None = None                    # (trials, bins, neurons)
+    bin_width: float | None = None
+    rates: np.ndarray = field(init=False)               # Hz, per neuron, trial mean
+    rates_std: np.ndarray = field(init=False)
 
-    def __init__(self, connectome, counts, spike_times, t_run, n_trials, stimulate,
-                 binned=None, bin_width=None):
-        self.c = connectome
-        self.counts = counts
-        self.spike_times = spike_times
-        self.t_run = t_run
-        self.n_trials = n_trials
-        self.stimulate = stimulate
-        self.binned = binned                             # (trials, bins, neurons)
-        self.bin_width = bin_width
-        self.rates = counts.mean(axis=0) / t_run         # Hz, per neuron
-        self.rates_std = counts.std(axis=0) / t_run
+    def __post_init__(self) -> None:
+        self.rates = self.counts.mean(axis=0) / self.t_run
+        self.rates_std = self.counts.std(axis=0) / self.t_run
 
-    def rate(self, idx):
-        return float(self.rates[idx])
+    def rate(self, index: int) -> float:
+        """
+        Mean firing rate of one neuron.
 
-    def active(self, min_rate=1.0):
-        """Model indices firing above `min_rate` Hz, sorted descending."""
-        idx = np.flatnonzero(self.rates >= min_rate)
-        return idx[np.argsort(-self.rates[idx])]
+        :param index: Model index.
+        :return: Rate in Hz.
+        """
+        return float(self.rates[index])
 
-    def table(self, min_rate=1.0, top=None, names=None):
-        import pandas as pd
-        idx = self.active(min_rate)
+    def active(self, min_rate_hz: float = 1.0) -> np.ndarray:
+        """
+        Neurons firing at or above a rate, loudest first.
+
+        :param min_rate_hz: Threshold in Hz.
+        :return: Model indices sorted by descending rate.
+        """
+        indices = np.flatnonzero(self.rates >= min_rate_hz)
+        return indices[np.argsort(-self.rates[indices])]
+
+    def table(self, min_rate: float = 1.0, top: int | None = None,
+              names: Mapping[int, str] | None = None) -> pd.DataFrame:
+        """
+        Tabulate the active neurons.
+
+        :param min_rate: Minimum rate in Hz to include.
+        :param top: Keep only this many rows.
+        :param names: Optional root_id -> label mapping for a name column.
+        :return: DataFrame indexed by model index.
+        """
+        indices = self.active(min_rate)
         if top:
-            idx = idx[:top]
-        df = pd.DataFrame({
-            "root_id": self.c.root_ids[idx],
-            "rate_hz": self.rates[idx],
-            "std_hz": self.rates_std[idx],
-        }, index=idx)
-        df.index.name = "model_index"
+            indices = indices[:top]
+        table = pd.DataFrame({"root_id": self.connectome.root_ids[indices],
+                              "rate_hz": self.rates[indices],
+                              "std_hz": self.rates_std[indices]}, index=indices)
+        table.index.name = "model_index"
         if names:
-            df.insert(0, "name", [names.get(int(r), "") for r in df.root_id])
-        return df
+            table.insert(0, "name", [names.get(int(root_id), "") for root_id in table.root_id])
+        return table
 
-    def trace(self, idx, trial=0):
-        """Firing rate over time (Hz) for one neuron, from the binned record."""
-        if self.binned is None:
+    def trace(self, index: int, trial: int = 0) -> np.ndarray:
+        """
+        Firing rate over time for one neuron, from the binned record.
+
+        :param index: Model index.
+        :param trial: Trial number.
+        :return: Rate in Hz per bin.
+        :raises ValueError: if the run did not record bins.
+        """
+        if self.binned is None or self.bin_width is None:
             raise ValueError("run(..., bin_width=...) to record a time course")
-        return self.binned[trial, :, idx].astype(np.float32) / self.bin_width
+        return self.binned[trial, :, index].astype(np.float32) / self.bin_width
 
-    def bin_times(self):
+    def bin_times(self) -> np.ndarray:
+        """
+        Start time of each recorded bin.
+
+        :return: Times in seconds.
+        :raises ValueError: if the run did not record bins.
+        """
+        if self.binned is None or self.bin_width is None:
+            raise ValueError("run(..., bin_width=...) to record a time course")
         return np.arange(self.binned.shape[1]) * self.bin_width
 
-    def raster(self, idx):
-        """(times, neuron) arrays for the given indices, trial 0."""
-        want = set(int(i) for i in np.atleast_1d(idx))
-        ts, ns = [], []
-        for t, fired in self.spike_times[0]:
-            for f in fired:
-                if int(f) in want:
-                    ts.append(t); ns.append(int(f))
-        return np.array(ts), np.array(ns)
+    def raster(self, indices: NeuronGroup, trial: int = 0) -> tuple[np.ndarray, np.ndarray]:
+        """
+        Spike times for a set of neurons.
 
-    def __repr__(self):
+        :param indices: Model index or indices.
+        :param trial: Trial number.
+        :return: (spike times, neuron index per spike).
+        """
+        wanted = set(int(i) for i in np.atleast_1d(indices))
+        times: list[float] = []
+        neurons: list[int] = []
+        for t, fired in self.spike_times[trial]:
+            for index in fired:
+                if int(index) in wanted:
+                    times.append(t)
+                    neurons.append(int(index))
+        return np.array(times), np.array(neurons)
+
+    def __repr__(self) -> str:
         return (f"<Result {int((self.rates > 0).sum()):,} neurons active, "
                 f"{self.n_trials} trial(s) x {self.t_run}s>")

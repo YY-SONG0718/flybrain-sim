@@ -1,0 +1,36 @@
+{
+ "name": "valence",
+ "drives": [
+  {
+   "name": "ORN_DM4+ORN_DM2",
+   "n": 94,
+   "windows": [
+    [
+     0.4,
+     1.1,
+     40.0
+    ]
+   ]
+  },
+  {
+   "name": "ORN_DA2",
+   "n": 39,
+   "windows": [
+    [
+     1.8,
+     2.5,
+     40.0
+    ]
+   ]
+  }
+ ],
+ "silence": [],
+ "readout": {
+  "name": "DNb05",
+  "model_index": 87747,
+  "rate_in_window": 322.1428527832031
+ },
+ "n_active": 10298,
+ "t_run": 3.0,
+ "seed": 3
+}

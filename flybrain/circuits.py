@@ -5,9 +5,15 @@ https://github.com/philshiu/Drosophila_brain_model (MIT licence).
 All gustatory receptor neuron (GRN) sets are from the right labellum;
 MN9 is the motor neuron that drives the proboscis extension response (PER).
 """
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .connectome import Connectome
 
 # Labellar sugar-sensing GRNs (right hemisphere)
-SUGAR_GRN = [
+SUGAR_GRN: list[int] = [
     720575940624963786, 720575940630233916, 720575940637568838, 720575940638202345,
     720575940617000768, 720575940630797113, 720575940632889389, 720575940621754367,
     720575940621502051, 720575940640649691, 720575940639332736, 720575940616885538,
@@ -17,7 +23,7 @@ SUGAR_GRN = [
 ]
 
 # Labellar bitter-sensing GRNs (right hemisphere)
-BITTER_GRN = [
+BITTER_GRN: list[int] = [
     720575940621778381, 720575940602353632, 720575940617094208, 720575940619197093,
     720575940626287336, 720575940618600651, 720575940627692048, 720575940630195909,
     720575940646212996, 720575940610483162, 720575940645743412, 720575940627578156,
@@ -27,7 +33,7 @@ BITTER_GRN = [
 ]
 
 # Labellar water-sensing GRNs (right hemisphere)
-WATER_GRN = [
+WATER_GRN: list[int] = [
     720575940612950568, 720575940631898285, 720575940606002609, 720575940612579053,
     720575940622902535, 720575940616177458, 720575940660292225, 720575940622486922,
     720575940613786774, 720575940629852866, 720575940625861168, 720575940613996959,
@@ -36,7 +42,7 @@ WATER_GRN = [
 ]
 
 # Ir94e GRNs -- a third, PER-suppressing taste channel
-IR94E_GRN = [
+IR94E_GRN: list[int] = [
     720575940614211295, 720575940638218173, 720575940628832256, 720575940626016017,
     720575940621375231, 720575940612920386, 720575940614273292, 720575940628198503,
     720575940626241636, 720575940619387814, 720575940624604560, 720575940615274425,
@@ -45,9 +51,9 @@ IR94E_GRN = [
 ]
 
 # MN9: the proboscis-extension motor neuron. Our behavioural readout.
-MN9 = 720575940660219265
+MN9: int = 720575940660219265
 
-SETS = {
+SETS: dict[str, list[int]] = {
     "sugar": SUGAR_GRN,
     "bitter": BITTER_GRN,
     "water": WATER_GRN,
@@ -55,10 +61,10 @@ SETS = {
 }
 
 
-def names(connectome):
+def names(connectome: "Connectome") -> dict[int, str]:
     """root_id -> short label, for readable result tables."""
-    out = {MN9: "MN9 (proboscis motor neuron)"}
-    for tag, ids in SETS.items():
-        for i, r in enumerate(ids):
-            out[r] = f"{tag}_GRN_{i + 1}"
-    return out
+    labels = {MN9: "MN9 (proboscis motor neuron)"}
+    for tag, root_ids in SETS.items():
+        for position, root_id in enumerate(root_ids):
+            labels[root_id] = f"{tag}_GRN_{position + 1}"
+    return labels

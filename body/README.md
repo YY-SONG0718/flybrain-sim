@@ -1,43 +1,42 @@
 # Giving the brain a body
 
-The proboscis in `make_movie.py` and on the interactive page is a **kinematic rig**: MN9's
-firing rate, low-pass filtered, sets two joint angles. It shows you the motor command. It is
-not physics — there is no mass, no contact, no gravity, nothing that could fail.
+The proboscis in `make_movie.py` and on the interactive pages is a kinematic rig. MN9's
+firing rate, after a low-pass filter, sets two joint angles. The rig has no mass, no contact
+and no gravity.
 
-For an actual embodied fly you want MuJoCo. Two options, both installable with `uv`:
+`flygym_per.py` drives a physical proboscis instead. It uses FlyGym 2.1, which bundles the
+FlyBody model from Vaxenburg et al. (2025). FlyBody has actuated proboscis joints: the
+rostrum pitch and the haustellum pitch. The fly is tethered, so only the proboscis moves.
 
-| | |
-|---|---|
-| [FlyGym / NeuroMechFly v2](https://neuromechfly.org) | `uv pip install "flygym"` — micro-CT-based adult female, compound-eye vision, olfaction, leg adhesion, built for closed-loop control |
-| [flybody](https://github.com/TuragaLab/flybody) | DeepMind + Janelia MuJoCo fly with RL-trained walking and flight policies |
-
-**Neither could be installed in the session where this project was built** (PyPI was blocked by
-network policy), so `flygym_per.py` is written against the published FlyGym API but has never
-been executed. Treat it as a starting point, not working code — expect to fix at least the
-joint names, which differ between FlyGym releases.
-
-## Running it
+## Run it
 
 ```bash
 cd flybrain-sim
-uv venv && source .venv/bin/activate
-uv pip install -r requirements.txt "flygym"
+source .venv/bin/activate
+uv pip install flygym pyarrow
 python body/flygym_per.py --seconds 2.4
 ```
 
-The script prints the actuated DoFs FlyGym exposes on the model before it does anything else.
-If no proboscis/rostrum/haustellum joints appear in that list, your FlyGym build doesn't
-actuate the mouthparts, and the honest options are to drive a head-pitch DoF as a stand-in or
-to add the joints to the MJCF yourself.
+The script writes `results/flygym_per.mp4` and `results/flygym_per.csv`. The CSV has one row
+per physics step with the MN9 drive, the filtered extension, and the distance from the head
+to the labellum in millimetres.
 
-## What the coupling actually is
+## What the script does
+
+1. It runs the brain for the sugar / sugar+bitter episode and records MN9's rate.
+2. It builds a tethered FlyBody with position actuators on the two proboscis pitch joints.
+3. It probes both ends of each joint range for 0.25 s and keeps the end that moves the
+   labellum furthest from the head. This removes any guess about the sign of "extension".
+4. It steps the physics. At each step the low-passed MN9 rate sets the joint targets between
+   rest and full extension.
+
+## The coupling
 
 ```
-sugar GRNs fire  ->  [138,639-neuron LIF network, FlyWire wiring]  ->  MN9 spike rate
-MN9 spike rate   ->  low-pass filter (tau ~ 60 ms, muscle + cuticle)  ->  joint targets
+sugar GRNs fire -> LIF network on the FlyWire wiring -> MN9 spike rate
+MN9 spike rate  -> low-pass filter, tau = 60 ms      -> joint angle targets
 ```
 
-That second arrow is the honest weak point. Real MN9 output drives muscle 9 through a
-neuromuscular junction with its own dynamics, and the proboscis is a hydraulic-ish linkage,
-not a servo. A first-order filter onto position targets is the crudest defensible choice;
-a Hill-type muscle model would be the next step.
+The second arrow is the weak point. Real MN9 output drives muscle 9 through a neuromuscular
+junction with its own dynamics. A first-order filter onto position targets is the simplest
+defensible choice. A Hill-type muscle model is the next step.
